@@ -1,0 +1,7 @@
+.git
+.github
+.env*
+**/*_test.go
+**/testdata
+coverage*
+bin

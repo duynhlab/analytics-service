@@ -1,0 +1,27 @@
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-check:
+    uses: duynhlab/gha-workflows/.github/workflows/go-check.yml@b13e2df19aed55c433d4bbea5fdc2202257b17f2
+    with:
+      command-test: |
+        go build ./...
+        go vet ./...
+        go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+        go test -tags=integration -run '^$' ./...
+      lint: true
+      # Compile the suite above; real ClickHouse execution remains a Linux gate.
+      integration: false

@@ -55,6 +55,9 @@ func (s *Service) Overview(ctx context.Context, filters domain.Filters) (respons
 		}
 		span.End()
 	}()
+	if ctx.Err() != nil {
+		return domain.Overview{}, domain.ErrUnavailable
+	}
 	heartbeats, err := s.reader.Heartbeats(ctx)
 	if err != nil {
 		s.observeFreshness(ctx, domain.Meta{})
@@ -64,6 +67,9 @@ func (s *Service) Overview(ctx context.Context, filters domain.Filters) (respons
 	s.observeFreshness(ctx, meta)
 	if err != nil {
 		return domain.Overview{}, err
+	}
+	if ctx.Err() != nil {
+		return domain.Overview{}, domain.ErrUnavailable
 	}
 	facts, err := s.reader.Read(ctx, filters)
 	if err != nil {

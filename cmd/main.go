@@ -35,62 +35,49 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	return runApplication(ctx, func(ctx context.Context, cleanups *cleanupStack) (*http.Server, net.Listener, error) {
+		return bootstrap(ctx, cfg, cleanups)
+	}, 8*time.Second)
+}
+
+func bootstrap(ctx context.Context, cfg config.Config, cleanups *cleanupStack) (*http.Server, net.Listener, error) {
 	oc := obsx.ConfigFromEnv()
 	oc.ServiceName = "analytics-service"
 	obs, err := obsx.SetupObservability(ctx, oc)
 	if err != nil {
-		return errors.New("observability initialization failed")
+		return nil, nil, errors.New("observability initialization failed")
 	}
-	defer func() {
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = obs.Shutdown(shutdown)
-	}()
+	cleanups.add("telemetry shutdown failed", obs.Shutdown)
+
 	logger := slogx.New(slogx.Config{Level: cfg.LogLevel, LoggerProvider: obs.LoggerProvider(), Flush: obs.ForceFlush})
 	conn, err := clickhouse.Open(cfg.ClickHouse)
 	if err != nil {
-		return errors.New("ClickHouse initialization failed")
+		return nil, nil, errors.New("ClickHouse initialization failed")
 	}
-	defer func() {
-		if conn.Close() != nil {
-			logger.Error(context.Background(), "ClickHouse pool close failed")
-		}
-	}()
+	cleanups.add("ClickHouse pool close failed", func(context.Context) error { return conn.Close() })
+
 	repo, err := repository.New(conn)
 	if err != nil {
-		return errors.New("repository initialization failed")
+		return nil, nil, errors.New("repository initialization failed")
 	}
 	service, err := logic.New(repo, time.Now)
 	if err != nil {
-		return errors.New("service initialization failed")
+		return nil, nil, errors.New("service initialization failed")
 	}
 	verifier, err := authmw.NewVerifier(cfg.Auth)
 	if err != nil {
-		return errors.New("staff verifier initialization failed")
+		return nil, nil, errors.New("staff verifier initialization failed")
 	}
 	gin.SetMode(gin.ReleaseMode)
 	server := &http.Server{Addr: cfg.Listen, Handler: web.New(service, verifier, logger.Slog()), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 7 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		return errors.New("HTTP listener failed")
+		return nil, nil, errors.New("HTTP listener failed")
 	}
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
 	logger.ProcessStarted(ctx, "http")
-	select {
-	case err = <-done:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return errors.New("HTTP server failed")
-		}
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		if err = server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-			return errors.New("HTTP shutdown deadline exceeded")
-		}
-		<-done
-	}
-	logger.ProcessStopped(context.Background(), "http", "success")
-	return nil
+	cleanups.add("process stop logging failed", func(ctx context.Context) error {
+		logger.ProcessStopped(ctx, "http", "stopped")
+		return nil
+	})
+	return server, listener, nil
 }

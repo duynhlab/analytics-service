@@ -39,7 +39,17 @@ For a real development run, export the settings illustrated in
 and run `go run ./cmd`. Validation lives in [config/config.go](./config/config.go).
 TLS is verified by default. The explicit insecure switch is for isolated local
 stacks only. Secrets must not enter Git, command history, reports or images.
-Shutdown drains HTTP before closing ClickHouse and flushing telemetry.
+Shutdown drains HTTP before closing ClickHouse and flushing telemetry. Startup
+failure unwinds acquired resources in reverse order; cleanup failures return
+sanitized errors. If draining exceeds its budget, HTTP connections are force
+closed. Handlers must cooperate with cancellation to finish promptly.
+
+The pinned shared `authmw` verifier owns a background JWKS refresher but exposes
+neither a shutdown method nor request-context propagation into key retrieval.
+The five-second context therefore bounds analytics reads, not a guaranteed
+wall-clock limit for authentication during JWKS problems. Track the shared
+package fix and Linux outage verification in the handoff issue. `/ready` probes
+one serving view; full schema/grant and CDC qualification remains a separate gate.
 
 `pkg/httpmw` provides HTTP RED instrumentation; `pkg/obsx` owns export and
 `pkg/logger/slogx` owns context-aware redacted logs. Query duration records only

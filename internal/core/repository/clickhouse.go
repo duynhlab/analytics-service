@@ -62,19 +62,19 @@ func (r *ClickHouse) query(ctx context.Context, name, sql string, params clickho
 		"max_execution_time": 2, "max_memory_usage": 536870912, "max_threads": 2,
 		"max_result_rows": 1000, "result_overflow_mode": "throw", "timeout_overflow_mode": "throw", "join_use_nulls": 1,
 	}))
+	if ctx.Err() != nil {
+		return domain.ErrUnavailable
+	}
 	rows, e := r.conn.Query(ctx, sql)
 	if e != nil {
 		return domain.ErrUnavailable
 	}
 	defer func() {
-		if rows.Close() != nil {
+		if rows.Close() != nil || rows.Err() != nil || ctx.Err() != nil {
 			err = domain.ErrUnavailable
 		}
 	}()
 	if e = scan(rows); e != nil {
-		return domain.ErrUnavailable
-	}
-	if rows.Close() != nil || rows.Err() != nil || ctx.Err() != nil {
 		return domain.ErrUnavailable
 	}
 	return nil
@@ -131,7 +131,7 @@ func (r *ClickHouse) Read(ctx context.Context, f domain.Filters) (domain.Facts, 
 		return nil
 	})
 	if err != nil {
-		return facts, err
+		return domain.Facts{}, err
 	}
 	err = r.query(ctx, "captured", "WITH "+ledgerSQL+capturedSQL+"SELECT toString(count()) FROM captured", params, func(rows driver.Rows) error {
 		if !rows.Next() {
@@ -146,7 +146,7 @@ func (r *ClickHouse) Read(ctx context.Context, f domain.Filters) (domain.Facts, 
 		return e
 	})
 	if err != nil {
-		return facts, err
+		return domain.Facts{}, err
 	}
 	err = r.query(ctx, "funnel", "WITH "+ledgerSQL+funnelSQL, params, func(rows driver.Rows) error {
 		if !rows.Next() {
@@ -171,7 +171,7 @@ func (r *ClickHouse) Read(ctx context.Context, f domain.Filters) (domain.Facts, 
 		return nil
 	})
 	if err != nil {
-		return facts, err
+		return domain.Facts{}, err
 	}
 	err = r.query(ctx, "products", "WITH "+ledgerSQL+capturedSQL+productsSQL, params, func(rows driver.Rows) error {
 		for rows.Next() {
@@ -194,5 +194,8 @@ func (r *ClickHouse) Read(ctx context.Context, f domain.Filters) (domain.Facts, 
 		}
 		return nil
 	})
-	return facts, err
+	if err != nil {
+		return domain.Facts{}, err
+	}
+	return facts, nil
 }

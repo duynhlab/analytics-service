@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,10 +36,10 @@ var fixtureTables = []fixtureTable{
 	{"order_orders", "id Int32, status String", []string{"id", "status"}},
 	{"order_order_items", "id Int32, order_id Int32, product_id Int32, product_name String, quantity Int32, subtotal Int64", []string{"id", "order_id", "product_id", "product_name", "quantity", "subtotal"}},
 	{"checkout_checkout_sessions", "id String, order_id Nullable(String), currency String, created_at DateTime64(6, 'UTC')", []string{"id", "order_id", "currency", "created_at"}},
-	{"payment_payments", "id String, order_id Nullable(Int64), currency String", []string{"id", "order_id", "currency"}},
-	{"payment_ledger_transactions", "id String, payment_id String, kind String, created_at DateTime64(6, 'UTC')", []string{"id", "payment_id", "kind", "created_at"}},
-	{"payment_ledger_entries", "id String, transaction_id String, account_id String, direction String, amount_minor Int64", []string{"id", "transaction_id", "account_id", "direction", "amount_minor"}},
-	{"payment_ledger_accounts", "id String, name String", []string{"id", "name"}},
+	{"payment_payments", "id Int64, order_id Nullable(Int64), currency String", []string{"id", "order_id", "currency"}},
+	{"payment_ledger_transactions", "id Int64, payment_id Int64, kind String, created_at DateTime64(6, 'UTC')", []string{"id", "payment_id", "kind", "created_at"}},
+	{"payment_ledger_entries", "id Int64, transaction_id Int64, account_id Int64, direction String, amount_minor Int64", []string{"id", "transaction_id", "account_id", "direction", "amount_minor"}},
+	{"payment_ledger_accounts", "id Int64, name String", []string{"id", "name"}},
 }
 
 func TestServingIntegration(t *testing.T) {
@@ -98,12 +99,12 @@ func TestServingIntegration(t *testing.T) {
 	insert("order_orders", "(1,'completed',1,0),(2,'completed',1,0),(3,'processing',1,0),(4,'completed',1,0)")
 	insert("order_order_items", "(1,1,101,'Historical name',2,9007199254740993,1,0),(1,1,101,'Historical name',2,9007199254740993,2,0),(2,1,102,'Deleted item',1,999,1,0),(2,1,102,'Deleted item',1,999,2,1)")
 	insert("checkout_checkout_sessions", "('c1','1','USD','2026-10-01 00:00:00',1,0),('c2','2','USD','2026-10-01 12:00:00',1,0),('c3','3','USD','2026-10-01 12:00:00',1,0),('c3',NULL,'USD','2026-10-01 12:00:00',2,0),('gone','4','USD','2026-10-01 12:00:00',1,0),('gone','4','USD','2026-10-01 12:00:00',2,1),('end',NULL,'USD','2026-10-03 00:00:00',1,0)")
-	insert("payment_payments", "('p1',1,'USD',1,0),('p2',2,'USD',1,0),('p3',NULL,'USD',1,0),('eur',3,'EUR',1,0),('rev',4,'USD',1,0)")
-	insert("payment_ledger_accounts", "('revenue','merchant_revenue',1,0),('cash','cash',1,0)")
+	insert("payment_payments", "(1,1,'USD',1,0),(2,2,'USD',1,0),(3,NULL,'USD',1,0),(4,3,'EUR',1,0),(5,4,'USD',1,0)")
+	insert("payment_ledger_accounts", "(6,'merchant_revenue',1,0),(7,'cash',1,0)")
 	// September capture refunded in October; October cohort capture after its end;
 	// October-only reversal is negative settled; orphan payment money remains included.
-	insert("payment_ledger_transactions", "('capture','p1','capture','2026-10-01 00:00:00',1,0),('old','p2','capture','2026-09-30 23:59:59.999998',1,0),('old-reversed','p2','reversal','2026-09-30 23:59:59.999999',1,0),('huge1','p1','capture','2026-10-01 12:00:00',1,0),('huge2','p1','capture','2026-10-01 12:00:00',1,0),('refund','p2','refund','2026-10-02 00:00:00',1,0),('orphan','p3','capture','2026-10-02 12:00:00',1,0),('eur','eur','capture','2026-10-01 12:00:00',1,0),('later','p2','capture','2026-10-03 00:00:00',1,0),('reversal','rev','reversal','2026-10-02 00:00:00',1,0)")
-	insert("payment_ledger_entries", "('e1','capture','revenue','credit',9007199254740993,1,0),('e1','capture','revenue','credit',9007199254740993,2,0),('cash','capture','cash','debit',9007199254740993,1,0),('e2','old','revenue','credit',1000,1,0),('old-reversed','old-reversed','revenue','debit',1000,1,0),('huge1','huge1','revenue','credit',9000000000000000000,1,0),('huge2','huge2','revenue','credit',9000000000000000000,1,0),('e3','refund','revenue','debit',200,1,0),('e4','orphan','revenue','credit',50,1,0),('e5','eur','revenue','credit',99999,1,0),('e6','later','revenue','credit',500,1,0),('e7','reversal','revenue','debit',300,1,0)")
+	insert("payment_ledger_transactions", "(8,1,'capture','2026-10-01 00:00:00',1,0),(9,2,'capture','2026-09-30 23:59:59.999998',1,0),(10,2,'reversal','2026-09-30 23:59:59.999999',1,0),(11,1,'capture','2026-10-01 12:00:00',1,0),(12,1,'capture','2026-10-01 12:00:00',1,0),(13,2,'refund','2026-10-02 00:00:00',1,0),(14,3,'capture','2026-10-02 12:00:00',1,0),(4,4,'capture','2026-10-01 12:00:00',1,0),(15,2,'capture','2026-10-03 00:00:00',1,0),(16,5,'reversal','2026-10-02 00:00:00',1,0)")
+	insert("payment_ledger_entries", "(17,8,6,'credit',9007199254740993,1,0),(17,8,6,'credit',9007199254740993,2,0),(7,8,7,'debit',9007199254740993,1,0),(18,9,6,'credit',1000,1,0),(10,10,6,'debit',1000,1,0),(11,11,6,'credit',9000000000000000000,1,0),(12,12,6,'credit',9000000000000000000,1,0),(19,13,6,'debit',200,1,0),(20,14,6,'credit',50,1,0),(21,4,6,'credit',99999,1,0),(22,15,6,'credit',500,1,0),(23,16,6,'debit',300,1,0)")
 	reader, err := clickhouse.Open(&clickhouse.Options{Addr: []string{addr}, Auth: clickhouse.Auth{Database: database, Username: user, Password: "fixture-only-password"}, DialTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -135,8 +136,10 @@ func TestServingIntegration(t *testing.T) {
 		t.Fatalf("item join/tombstone failure: %+v", facts.Products)
 	}
 	for _, sql := range []string{"SELECT * FROM " + database + ".payment_payments", "INSERT INTO " + database + ".order_orders VALUES (99,'completed',1,0)", "CREATE TABLE " + database + ".forbidden (id Int32) ENGINE=Memory"} {
-		if err := reader.Exec(ctx, sql); err == nil {
-			t.Fatalf("reader privilege leak: %s", sql)
+		err := reader.Exec(ctx, sql)
+		var exception *clickhouse.Exception
+		if !errors.As(err, &exception) || exception.Code != 497 {
+			t.Fatalf("expected ACCESS_DENIED for %s, got %v", sql, err)
 		}
 	}
 	canceled, c := context.WithCancel(ctx)
@@ -152,11 +155,11 @@ func TestServingIntegration(t *testing.T) {
 		return nil
 	})
 	stop()
-	if err == nil || time.Since(start) > 2*time.Second {
+	if err == nil || time.Since(start) > 500*time.Millisecond {
 		t.Fatal("in-flight cancellation did not bound query", err)
 	}
 	// Invalid ledger directions fail closed rather than fabricate a zero contribution.
-	insert("payment_ledger_entries", "('bad','capture','revenue','debit',1,1,0)")
+	insert("payment_ledger_entries", "(24,8,6,'debit',1,1,0)")
 	if _, err := repo.Read(ctx, filters); err == nil {
 		t.Fatal("accepted invalid merchant leg")
 	}

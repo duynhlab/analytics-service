@@ -4,35 +4,158 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/duynhlab/analytics-service/internal/core/domain"
 )
 
 type queryConn struct {
 	driver.Conn
-	rows driver.Rows
+	query func(context.Context) (driver.Rows, error)
 }
 
-func (c queryConn) Query(context.Context, string, ...any) (driver.Rows, error) { return c.rows, nil }
+func (c queryConn) Query(ctx context.Context, _ string, _ ...any) (driver.Rows, error) {
+	return c.query(ctx)
+}
 
-type lateErrorRows struct {
+type testRows struct {
 	driver.Rows
-	closed bool
+	closes              int
+	closeErr, streamErr error
+	scan                func(...any) error
+	next                func() bool
 }
 
-func (r *lateErrorRows) Close() error {
-	r.closed = true
-	return errors.New("late server exception with sensitive details")
-}
-func (r *lateErrorRows) Err() error { return nil }
-func TestLateStreamErrorFailsClosed(t *testing.T) {
-	rows := &lateErrorRows{}
-	repo, err := New(queryConn{rows: rows})
-	if err != nil {
-		t.Fatal(err)
+func (r *testRows) Close() error { r.closes++; return r.closeErr }
+func (r *testRows) Err() error   { return r.streamErr }
+func (r *testRows) Next() bool {
+	if r.next != nil {
+		return r.next()
 	}
-	err = repo.query(context.Background(), "test", "SELECT", nil, func(driver.Rows) error { return nil })
-	if err == nil || err.Error() != "analytics unavailable" || !rows.closed {
-		t.Fatal("late error ignored or leaked", err)
+	return false
+}
+func (r *testRows) Scan(v ...any) error { return r.scan(v...) }
+
+func TestQueryFailures(t *testing.T) {
+	sensitive := errors.New("secret SQL and credentials")
+	for _, name := range []string{"success", "query", "scan", "stream", "close", "cancel-before", "cancel-scan"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			rows := &testRows{}
+			if name == "stream" {
+				rows.streamErr = sensitive
+			}
+			if name == "close" {
+				rows.closeErr = sensitive
+			}
+			calls := 0
+			repo, err := New(queryConn{query: func(qctx context.Context) (driver.Rows, error) {
+				calls++
+				if d, ok := qctx.Deadline(); !ok || time.Until(d) > 2*time.Second {
+					t.Error("missing query budget")
+				}
+				if name == "query" {
+					return nil, sensitive
+				}
+				return rows, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "cancel-before" {
+				cancel()
+			}
+			err = repo.query(ctx, "test", "SELECT", nil, func(driver.Rows) error {
+				if name == "cancel-scan" {
+					cancel()
+				}
+				if name == "scan" {
+					return sensitive
+				}
+				return nil
+			})
+			if name == "success" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, domain.ErrUnavailable) {
+				t.Fatal(err)
+			}
+			want := 1
+			if name == "query" || name == "cancel-before" {
+				want = 0
+			}
+			if rows.closes != want {
+				t.Fatalf("closed %d times, want %d", rows.closes, want)
+			}
+			if name == "cancel-before" && calls != 0 {
+				t.Fatal("queried canceled context")
+			}
+		})
+	}
+}
+
+func TestReadStopsOnFailure(t *testing.T) {
+	for _, failure := range []string{"scan", "stream", "close"} {
+		t.Run(failure, func(t *testing.T) {
+			calls := 0
+			emitted := false
+			rows := &testRows{next: func() bool {
+				if emitted {
+					return false
+				}
+				emitted = true
+				return true
+			}, scan: func(v ...any) error {
+				if failure == "scan" {
+					return errors.New("sensitive scan error")
+				}
+				*v[0].(*string) = "2026-10-01"
+				*v[1].(*string) = "100"
+				*v[2].(*string) = "0"
+				return nil
+			}}
+			if failure == "stream" {
+				rows.streamErr = errors.New("stream failed")
+			}
+			if failure == "close" {
+				rows.closeErr = errors.New("close failed")
+			}
+			repo, err := New(queryConn{query: func(context.Context) (driver.Rows, error) { calls++; return rows, nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := repo.Read(t.Context(), domain.Filters{Currency: "USD", From: "2026-10-01", To: "2026-10-02"})
+			if !errors.Is(err, domain.ErrUnavailable) || calls != 1 || len(facts.Daily) != 0 || rows.closes != 1 {
+				t.Fatalf("partial result or continued read: %+v %v calls=%d closes=%d", facts, err, calls, rows.closes)
+			}
+		})
+	}
+}
+
+func TestQueryDeadline(t *testing.T) {
+	for _, budget := range []time.Duration{2 * time.Second, 50 * time.Millisecond} {
+		t.Run(budget.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := t.Context()
+				if budget < 2*time.Second {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, budget)
+					defer cancel()
+				}
+				started := time.Now()
+				repo, err := New(queryConn{query: func(ctx context.Context) (driver.Rows, error) { <-ctx.Done(); return nil, ctx.Err() }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = repo.query(ctx, "deadline", "SELECT", nil, func(driver.Rows) error { t.Fatal("scanned failed query"); return nil })
+				if !errors.Is(err, domain.ErrUnavailable) || time.Since(started) != budget {
+					t.Fatal(err, time.Since(started))
+				}
+			})
+		})
 	}
 }

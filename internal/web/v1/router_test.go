@@ -30,6 +30,9 @@ func (s *serviceStub) Overview(ctx context.Context, f domain.Filters) (domain.Ov
 	if _, ok := ctx.Deadline(); !ok {
 		panic("missing deadline")
 	}
+	if ctx.Err() != nil {
+		return domain.Overview{}, ctx.Err()
+	}
 	return domain.Overview{Filters: f}, s.err
 }
 func (s *serviceStub) Ready(context.Context) error { return s.err }
@@ -63,7 +66,27 @@ func TestDirectBackendAuthorization(t *testing.T) {
 		}
 		return value
 	}
+
 	valid := token(nil)
+	forgedKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := jwt.NewParser().ParseUnverified(valid, jwt.MapClaims{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := parsed.SignedString(forgedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongAlgToken := jwt.NewWithClaims(jwt.SigningMethodHS256, parsed.Claims)
+	wrongAlgToken.Header["kid"] = "test"
+	wrongAlg, err := wrongAlgToken.SignedString([]byte("test-only-hmac-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	const route = "/analytics/v1/protected/commerce/overview"
 	const query = "?currency=USD&from=2026-10-01&to=2026-10-03"
 	tests := []struct {
@@ -71,6 +94,8 @@ func TestDirectBackendAuthorization(t *testing.T) {
 		status              int
 	}{
 		{"staff", valid, query, 200},
+		{"bad signature", forged, query, 401},
+		{"wrong algorithm", wrongAlg, query, 401},
 		{"missing", "", query, 401},
 		{"malformed", "not.jwt", query, 401},
 		{"customer issuer", token(func(c jwt.MapClaims) { c["iss"] = "https://staff.example/realms/duynhlab" }), query, 401},
@@ -111,6 +136,21 @@ func TestDirectBackendAuthorization(t *testing.T) {
 			}
 		})
 	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	canceledRequest := httptest.NewRequest(http.MethodGet, route+query, nil).WithContext(ctx)
+	canceledRequest.Header.Set("Authorization", "Bearer "+valid)
+	canceledResponse := httptest.NewRecorder()
+	router.ServeHTTP(canceledResponse, canceledRequest)
+	if canceledResponse.Code != 503 {
+		t.Fatal("canceled request succeeded", canceledResponse.Code)
+	}
+	ready := httptest.NewRecorder()
+	router.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if ready.Code != 200 {
+		t.Fatal("healthy readiness failed", ready.Code)
+	}
 	service.err = errors.New("secret DSN and SQL")
 	r := httptest.NewRequest(http.MethodGet, route+query, nil)
 	r.Header.Set("Authorization", "Bearer "+valid)
@@ -128,5 +168,82 @@ func TestDirectBackendAuthorization(t *testing.T) {
 		if w.Code != tt.status {
 			t.Fatal(tt, w.Code)
 		}
+	}
+}
+
+func TestJWKSUnavailable(t *testing.T) {
+	for _, slow := range []bool{false, true} {
+		name := "down"
+		if slow {
+			name = "delayed outage"
+		}
+		t.Run(name, func(t *testing.T) {
+			entered := make(chan struct{}, 1)
+			release := make(chan struct{})
+			jwks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case entered <- struct{}{}:
+				default:
+				}
+				if slow {
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+				}
+				http.Error(w, "sensitive upstream error", http.StatusServiceUnavailable)
+			}))
+			defer jwks.Close()
+			// Bound the fixture even if construction fails unexpectedly.
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}()
+			cfg := authmw.Config{Issuer: "https://staff.example/realms/duynhlab-staff", Audience: "duynhlab-platform", JWKSURL: jwks.URL}
+			type result struct {
+				v   *authmw.Verifier
+				err error
+			}
+			built := make(chan result, 1)
+			go func() { v, e := authmw.NewVerifier(cfg); built <- result{v, e} }()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("JWKS not requested")
+			}
+			close(release)
+			var got result
+			select {
+			case got = <-built:
+			case <-time.After(3 * time.Second):
+				t.Fatal("verifier construction hung")
+			}
+			if got.err != nil {
+				t.Fatal(got.err)
+			}
+			key, err := rsa.GenerateKey(rand.Reader, 2048)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"iss": cfg.Issuer, "aud": cfg.Audience, "sub": "staff", "exp": time.Now().Add(time.Hour).Unix()})
+			tok.Header["kid"] = "unavailable"
+			bearer, err := tok.SignedString(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := &serviceStub{}
+			router := New(service, got.v, nil)
+			r := httptest.NewRequest(http.MethodGet, "/analytics/v1/protected/commerce/overview?currency=USD&from=2026-10-01&to=2026-10-03", nil)
+			r.Header.Set("Authorization", "Bearer "+bearer)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
+			if w.Code != 503 || service.calls != 0 || strings.Contains(w.Body.String(), "sensitive") || !strings.Contains(w.Body.String(), "AUTH_UNAVAILABLE") {
+				t.Fatal(w.Code, w.Body.String(), service.calls)
+			}
+		})
 	}
 }

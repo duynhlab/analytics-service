@@ -89,13 +89,19 @@ func TestAssemblyFailsClosed(t *testing.T) {
 }
 
 type fakeReader struct {
-	heartbeats []domain.Heartbeat
-	err        error
-	reads      int
-	read       func(context.Context)
+	heartbeats     []domain.Heartbeat
+	err            error
+	reads          int
+	read           func(context.Context)
+	heartbeatCalls int
+	heartbeat      func()
 }
 
 func (f *fakeReader) Heartbeats(context.Context) ([]domain.Heartbeat, error) {
+	f.heartbeatCalls++
+	if f.heartbeat != nil {
+		f.heartbeat()
+	}
 	return f.heartbeats, f.err
 }
 func (f *fakeReader) Read(ctx context.Context, _ domain.Filters) (domain.Facts, error) {
@@ -145,5 +151,37 @@ func TestServiceFreshnessAndCancellation(t *testing.T) {
 	r.err = nil
 	if err = s.Ready(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCancellationStopsFurtherReads(t *testing.T) {
+	for _, name := range []string{"before heartbeat", "after heartbeat", "during facts"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			reader := &fakeReader{heartbeats: beats(testNow)}
+			switch name {
+			case "before heartbeat":
+				cancel()
+			case "after heartbeat":
+				reader.heartbeat = cancel
+			case "during facts":
+				reader.read = func(context.Context) { cancel() }
+			}
+			s, err := New(reader, func() time.Time { return testNow })
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.Overview(ctx, testFilters)
+			if !errors.Is(err, domain.ErrUnavailable) {
+				t.Fatal(err)
+			}
+			if name == "before heartbeat" && reader.heartbeatCalls != 0 {
+				t.Fatal("queried heartbeat after cancel")
+			}
+			if name != "during facts" && reader.reads != 0 {
+				t.Fatal("read facts after cancel")
+			}
+		})
 	}
 }

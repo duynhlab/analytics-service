@@ -1,5 +1,5 @@
 , cohort AS (
-    SELECT id, order_id FROM commerce.checkout_checkout_sessions_live
+    SELECT id, order_id FROM analytics.checkout_checkout_sessions_live
     WHERE currency = {currency:String}
         AND created_at >= {from:DateTime64(6, 'UTC')} AND created_at < {to:DateTime64(6, 'UTC')}
 ), balances AS (
@@ -12,4 +12,4 @@ SELECT toString(count()), toString(countIf(c.order_id IS NOT NULL)),
     countIf(b.invalid > 0)
 FROM cohort AS c
 LEFT JOIN balances AS b ON c.order_id = b.order_id
-LEFT JOIN commerce.order_orders_live AS o ON c.order_id = toString(o.id)
+LEFT JOIN analytics.order_orders_live AS o ON c.order_id = toString(o.id)

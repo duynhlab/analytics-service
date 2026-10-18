@@ -60,9 +60,9 @@ No SQL, credentials, request filters or business payloads are logged.
 
 Run against a **disposable ClickHouse 26.9 server**, separate from the platform.
 The fixture creates a unique `analytics_test_*` database and restricted test
-user, then drops both. It never alters `commerce` or starts a container itself.
+user, then drops both. It never alters `analytics` or starts a container itself.
 The temporary admin connection is test-only; production accepts only
-`analytics_read` and never receives the test credential.
+`analytics_reader` and never receives the test credential.
 
 Example preparation on the Linux audit host (not part of the Mac coding gate):
 

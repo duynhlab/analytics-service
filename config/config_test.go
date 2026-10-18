@@ -16,7 +16,7 @@ import (
 )
 
 func TestConfigSecurity(t *testing.T) {
-	base := map[string]string{"CLICKHOUSE_ADDR": "clickhouse:9440", "CLICKHOUSE_USER": "analytics_read", "CLICKHOUSE_PASSWORD": "test", "OIDC_STAFF_ISSUER": "https://auth.example/realms/duynhlab-staff"}
+	base := map[string]string{"CLICKHOUSE_ADDR": "clickhouse:9440", "CLICKHOUSE_USER": "analytics_reader", "CLICKHOUSE_PASSWORD": "test", "OIDC_STAFF_ISSUER": "https://auth.example/realms/duynhlab-staff"}
 	get := func(k string) string { return base[k] }
 	cfg, err := load(get)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestCustomCA(t *testing.T) {
 			if err := os.WriteFile(path, tt.data, 0600); err != nil {
 				t.Fatal(err)
 			}
-			values := map[string]string{"CLICKHOUSE_ADDR": "clickhouse:9440", "CLICKHOUSE_USER": "analytics_read", "CLICKHOUSE_PASSWORD": "test", "OIDC_STAFF_ISSUER": "https://auth.example/realms/duynhlab-staff", "CLICKHOUSE_CA_FILE": path}
+			values := map[string]string{"CLICKHOUSE_ADDR": "clickhouse:9440", "CLICKHOUSE_USER": "analytics_reader", "CLICKHOUSE_PASSWORD": "test", "OIDC_STAFF_ISSUER": "https://auth.example/realms/duynhlab-staff", "CLICKHOUSE_CA_FILE": path}
 			cfg, err := load(func(k string) string { return values[k] })
 			if !tt.valid {
 				if err == nil || strings.Contains(err.Error(), "sensitive") {

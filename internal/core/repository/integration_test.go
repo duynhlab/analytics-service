@@ -16,7 +16,7 @@ import (
 	"github.com/duynhlab/analytics-service/internal/core/domain"
 )
 
-// Only tests rewrite the fixed commerce namespace. Every run owns a fresh
+// Only tests rewrite the fixed analytics namespace. Every run owns a fresh
 // database and user; the service itself cannot select a database or perform DDL.
 type fixtureConn struct {
 	driver.Conn
@@ -24,7 +24,7 @@ type fixtureConn struct {
 }
 
 func (c fixtureConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-	return c.Conn.Query(ctx, strings.ReplaceAll(query, "commerce.", c.database+"."), args...)
+	return c.Conn.Query(ctx, strings.ReplaceAll(query, "analytics.", c.database+"."), args...)
 }
 
 type fixtureTable struct {
@@ -149,7 +149,7 @@ func TestServingIntegration(t *testing.T) {
 	}
 	short, stop := context.WithTimeout(ctx, 50*time.Millisecond)
 	start := time.Now()
-	err = repo.query(short, "cancel-test", "SELECT sleep(1) FROM commerce.order_analytics_cdc_heartbeat_live", nil, func(rows driver.Rows) error {
+	err = repo.query(short, "cancel-test", "SELECT sleep(1) FROM analytics.order_analytics_cdc_heartbeat_live", nil, func(rows driver.Rows) error {
 		for rows.Next() {
 		}
 		return nil

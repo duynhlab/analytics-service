@@ -43,12 +43,12 @@ func load(get func(string) string) (Config, error) {
 		return cfg, fmt.Errorf("CLICKHOUSE_ADDR must be host:port")
 	}
 	user, password := get("CLICKHOUSE_USER"), get("CLICKHOUSE_PASSWORD")
-	if user != "analytics_read" || password == "" {
-		return cfg, fmt.Errorf("CLICKHOUSE_USER must be analytics_read and CLICKHOUSE_PASSWORD is required")
+	if user != "analytics_reader" || password == "" {
+		return cfg, fmt.Errorf("CLICKHOUSE_USER must be analytics_reader and CLICKHOUSE_PASSWORD is required")
 	}
 	cfg.ClickHouse = &clickhouse.Options{
 		Addr: []string{addr}, Protocol: clickhouse.Native,
-		Auth:        clickhouse.Auth{Database: "commerce", Username: user, Password: password},
+		Auth:        clickhouse.Auth{Database: "analytics", Username: user, Password: password},
 		DialTimeout: time.Second, ReadTimeout: 2 * time.Second,
 		MaxOpenConns: 4, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute,
 	}

@@ -99,7 +99,7 @@ func (r *ClickHouse) Heartbeats(ctx context.Context) ([]domain.Heartbeat, error)
 }
 func (r *ClickHouse) Ready(ctx context.Context) error {
 	// A real serving-view read checks the connection and grants without certifying freshness.
-	return r.query(ctx, "ready", "SELECT emitted_at FROM commerce.order_analytics_cdc_heartbeat_live LIMIT 1", nil, func(rows driver.Rows) error {
+	return r.query(ctx, "ready", "SELECT emitted_at FROM analytics.order_analytics_cdc_heartbeat_live LIMIT 1", nil, func(rows driver.Rows) error {
 		for rows.Next() {
 			var at time.Time
 			if err := rows.Scan(&at); err != nil {

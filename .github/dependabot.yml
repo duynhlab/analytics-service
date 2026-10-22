@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "go"]
+    groups:
+      duynhlab-pkg:
+        patterns:
+          - "github.com/duynhlab/pkg/*"
+    ignore:
+      # RFC-0031 / ADR-072: the OpenTelemetry version is owned by duynhlab/pkg.
+      # obsx pins the SDK, exporters, contrib and semconv together and the
+      # services import only the API, so bumping go.opentelemetry.io/* here
+      # would skew the API against the SDK the shared package links. It moves
+      # with the pkg release train instead.
+      - dependency-name: "go.opentelemetry.io/*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels: ["dependencies", "github-actions"]
+    # One PR per gha-workflows release instead of one per reusable workflow:
+    # every ref moves to the same commit together.
+    groups:
+      gha-workflows:
+        patterns:
+          - "duynhlab/gha-workflows*"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels: ["dependencies", "docker"]

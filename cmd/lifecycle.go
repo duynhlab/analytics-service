@@ -16,8 +16,8 @@ type cleanupStep struct {
 }
 type cleanupStack []cleanupStep
 
-func (c *cleanupStack) add(message string, close func(context.Context) error) {
-	*c = append(*c, cleanupStep{message, func(ctx context.Context, _ error) error { return close(ctx) }})
+func (c *cleanupStack) add(message string, fn func(context.Context) error) {
+	*c = append(*c, cleanupStep{message, func(ctx context.Context, _ error) error { return fn(ctx) }})
 }
 
 // trackProcess runs after application resources close and before telemetry flushes.

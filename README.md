@@ -64,22 +64,18 @@ user, then drops both. It never alters `analytics` or starts a container itself.
 The temporary admin connection is test-only; production accepts only
 `analytics_reader` and never receives the test credential.
 
-Example preparation on the Linux audit host (not part of the Mac coding gate):
+The existing pinned reusable CI workflow runs the integration job with a
+separate digest-pinned ClickHouse container. To run the same gate on Linux:
 
 ```bash
-docker run --rm -d --name analytics-test-ch \
-  -p 127.0.0.1:19000:9000 \
-  -e CLICKHOUSE_USER=fixture_admin \
-  -e CLICKHOUSE_PASSWORD=fixture-only-password \
-  -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
-  clickhouse/clickhouse-server:26.9
-# Wait until the native server is ready.
-export ANALYTICS_TEST_CLICKHOUSE_ADDR=127.0.0.1:19000
-export ANALYTICS_TEST_CLICKHOUSE_USER=fixture_admin
-export ANALYTICS_TEST_CLICKHOUSE_PASSWORD=fixture-only-password
-go test -tags=integration -race -count=1 ./internal/core/repository
-docker stop analytics-test-ch
+bash scripts/test-integration.sh
 ```
+
+The script allocates an ephemeral loopback port, waits for native readiness,
+exports fixture-only credentials, writes `coverage-integration.out`, and removes
+the container on exit. To use an already isolated test server, set the three
+`ANALYTICS_TEST_CLICKHOUSE_*` variables and run
+`go test -tags=integration -race -count=1 ./internal/core/repository` directly.
 
 The explicit integration test fails if its endpoint is missing. It checks
 actual parameter binding and native scans, UTC event/cohort boundaries,
@@ -93,3 +89,17 @@ read profile, TLS and negative grants, heartbeat loss/recovery, staff auth throu
 Envoy, performance on representative data, telemetry redaction/correlation and
 the full local-stack browser audit. No image publication, route exposure, Admin
 navigation, deployment or release is authorized by these unit checks.
+
+## Telemetry
+
+Freshness is sampled at startup and every 30 seconds with a 2-second budget.
+Metric callbacks perform no I/O; a failed or expired snapshot emits unknown
+state and omits lag. Request freshness remains independently checked.
+The existing ClickHouse adapter emits standard DB client spans and duration
+metrics without SQL/parameters. Shared HTTP middleware owns the access log and
+RED metrics; bounded failure reasons are carried on the overview span.
+
+See the [planned platform telemetry contract and Linux gates](https://github.com/duynhlab/homelab/blob/feat/rfc0030-phase0/docs/observability/analytics/README.md).
+The `pkg/semconv` analytics registry change must merge before the first service
+release/C22 qualification. Do not deploy the new instrument names against the
+old registry.

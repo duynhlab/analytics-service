@@ -4,14 +4,20 @@ package repository
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"time"
 
+	"github.com/ClickHouse/ch-go/proto"
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/duynhlab/analytics-service/internal/core/domain"
+	"github.com/duynhlab/pkg/obsx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 //go:embed sql/ledger.sql
@@ -38,7 +44,7 @@ type ClickHouse struct {
 }
 
 func New(conn driver.Conn) (*ClickHouse, error) {
-	duration, err := otel.Meter("github.com/duynhlab/analytics-service").Float64Histogram("analytics.query.duration", metric.WithUnit("s"))
+	duration, err := otel.Meter("github.com/duynhlab/analytics-service").Float64Histogram("db.client.operation.duration", metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(obsx.DBDurationBuckets...))
 	if err != nil {
 		return nil, err
 	}
@@ -49,36 +55,86 @@ func New(conn driver.Conn) (*ClickHouse, error) {
 // Error details never cross this boundary: driver errors may contain SQL/data.
 func (r *ClickHouse) query(ctx context.Context, name, sql string, params clickhouse.Parameters, scan func(driver.Rows) error) (err error) {
 	start := time.Now()
-	defer func() {
-		outcome := "success"
-		if err != nil {
-			outcome = "error"
-		}
-		r.duration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attribute.String("query", name), attribute.String("outcome", outcome)))
-	}()
+	attrs := []attribute.KeyValue{
+		semconv.DBSystemNameClickHouse, semconv.DBOperationName("SELECT"),
+		semconv.DBNamespace("analytics"), semconv.DBQuerySummary(querySummary(name)),
+	}
+	ctx, span := otel.Tracer("github.com/duynhlab/analytics-service/internal/core/repository").Start(ctx, querySummary(name), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(params), clickhouse.WithSettings(clickhouse.Settings{
+	defer func() {
+		if err != nil {
+			reason := domain.FailureReason(ctx, err)
+			err = domain.Unavailable(reason)
+			// Intentional caller cancellation is not a database server failure.
+			if reason != "cancelled" {
+				kind := semconv.ErrorTypeKey.String(reason)
+				attrs = append(attrs, kind)
+				span.SetAttributes(kind)
+				span.SetStatus(codes.Error, reason)
+			}
+		}
+		r.duration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+		span.End()
+	}()
+	ctx = clickhouse.Context(ctx, clickhouse.WithSpan(span.SpanContext()), clickhouse.WithParameters(params), clickhouse.WithSettings(clickhouse.Settings{
 		"max_execution_time": 2, "max_memory_usage": 536870912, "max_threads": 2,
 		"max_result_rows": 1000, "result_overflow_mode": "throw", "timeout_overflow_mode": "throw", "join_use_nulls": 1,
 	}))
 	if ctx.Err() != nil {
-		return domain.ErrUnavailable
+		return ctx.Err()
 	}
 	rows, e := r.conn.Query(ctx, sql)
 	if e != nil {
-		return domain.ErrUnavailable
+		return queryFailure(e)
 	}
 	defer func() {
-		if rows.Close() != nil || rows.Err() != nil || ctx.Err() != nil {
-			err = domain.ErrUnavailable
+		closeErr := rows.Close()
+		streamErr := rows.Err()
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		} else if streamErr != nil {
+			err = queryFailure(streamErr)
+		} else if closeErr != nil {
+			err = queryFailure(closeErr)
 		}
 	}()
 	if e = scan(rows); e != nil {
-		return domain.ErrUnavailable
+		return queryFailure(e)
 	}
 	return nil
 }
+
+// Fixed summaries describe reviewed operations; never derive them from SQL or
+// parameters, even when the driver offers richer query diagnostics.
+func querySummary(name string) string {
+	switch name {
+	case "heartbeats", "ready", "daily", "captured", "products", "funnel":
+		return "SELECT analytics." + name
+	default:
+		return "SELECT analytics"
+	}
+}
+
+func queryFailure(err error) error {
+	var exception *clickhouse.Exception
+	if errors.As(err, &exception) {
+		switch proto.Error(exception.Code) {
+		case proto.ErrTimeoutExceeded:
+			return domain.Unavailable("timeout")
+		case proto.ErrTooManyRows, proto.ErrMemoryLimitExceeded:
+			return domain.Unavailable("limits")
+		}
+	}
+	if errors.Is(err, domain.ErrUnavailable) || errors.Is(err, domain.ErrValidation) {
+		return domain.Unavailable("validation")
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return domain.Unavailable("query")
+}
+
 func (r *ClickHouse) Heartbeats(ctx context.Context) ([]domain.Heartbeat, error) {
 	result := make([]domain.Heartbeat, 0, 3)
 	err := r.query(ctx, "heartbeats", heartbeatsSQL, nil, func(rows driver.Rows) error {

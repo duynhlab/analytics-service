@@ -145,7 +145,7 @@ func TestServiceFreshnessAndCancellation(t *testing.T) {
 		t.Fatal("returned success after cancellation")
 	}
 	r.err = errors.New("secret SQL details")
-	if _, err = s.Overview(context.Background(), testFilters); err != domain.ErrUnavailable {
+	if _, err = s.Overview(context.Background(), testFilters); !errors.Is(err, domain.ErrUnavailable) || err.Error() != domain.ErrUnavailable.Error() {
 		t.Fatal("leaked dependency error", err)
 	}
 	r.err = nil

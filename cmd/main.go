@@ -15,6 +15,7 @@ import (
 	"github.com/duynhlab/analytics-service/config"
 	"github.com/duynhlab/analytics-service/internal/core/repository"
 	logic "github.com/duynhlab/analytics-service/internal/logic/v1"
+	"github.com/duynhlab/analytics-service/internal/telemetry"
 	web "github.com/duynhlab/analytics-service/internal/web/v1"
 	"github.com/duynhlab/pkg/authmw"
 	"github.com/duynhlab/pkg/logger/slogx"
@@ -65,6 +66,11 @@ func bootstrap(ctx context.Context, cfg config.Config, cleanups *cleanupStack) (
 	if err != nil {
 		return nil, nil, errors.New("service initialization failed")
 	}
+	stopFreshness, err := telemetry.StartFreshness(ctx, repo)
+	if err != nil {
+		return nil, nil, errors.New("freshness telemetry initialization failed")
+	}
+	cleanups.add("freshness telemetry shutdown failed", stopFreshness)
 	verifier, err := authmw.NewVerifier(cfg.Auth)
 	if err != nil {
 		return nil, nil, errors.New("staff verifier initialization failed")

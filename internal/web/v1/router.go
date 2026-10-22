@@ -40,7 +40,7 @@ func New(service OverviewService, verifier *authmw.Verifier, logger *slog.Logger
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
-	}, staffJWT(verifier), authmw.MiddlewareRequireRole("backoffice_admin"))
+	}, authmw.MiddlewareJWT(verifier), authmw.MiddlewareRequireRole("backoffice_admin"))
 	protected.GET("/commerce/overview", func(c *gin.Context) {
 		values, err := url.ParseQuery(c.Request.URL.RawQuery)
 		if err != nil {

@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
-	github.com/duynhlab/pkg/authmw v0.38.0
+	github.com/duynhlab/pkg/authmw v0.39.0
 	github.com/duynhlab/pkg/httpmw v0.4.0
 	github.com/duynhlab/pkg/httpx v0.38.0
 	github.com/duynhlab/pkg/logger/slogx v0.4.0

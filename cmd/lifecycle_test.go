@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/duynhlab/pkg/logger/slogx"
 )
 
 func TestStartupCleanup(t *testing.T) {
@@ -76,9 +80,17 @@ func TestHTTPDrain(t *testing.T) {
 				close(finished)
 			})}
 			server.RegisterOnShutdown(func() { close(shutting) })
+			var logs bytes.Buffer
 			done := make(chan error, 1)
 			go func() {
 				done <- runApplication(ctx, func(_ context.Context, s *cleanupStack) (*http.Server, net.Listener, error) {
+					s.add("telemetry shutdown failed", func(context.Context) error {
+						if !strings.Contains(logs.String(), "process.stopped") {
+							t.Error("telemetry closed before stop event")
+						}
+						return nil
+					})
+					s.trackProcess(slogx.New(slogx.Config{Stdout: &logs}))
 					s.add("cleanup failed", func(context.Context) error {
 						if !force {
 							select {
@@ -122,6 +134,11 @@ func TestHTTPDrain(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("shutdown hung")
 			}
+			wantOutcome, wantLevel := "graceful", "info"
+			if force {
+				wantOutcome, wantLevel = "error", "error"
+			}
+			assertStopEvent(t, logs.Bytes(), wantOutcome, wantLevel)
 			if force {
 				if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
 					t.Fatal(err)
@@ -151,5 +168,45 @@ func TestListenerFailure(t *testing.T) {
 	err := serve(t.Context(), &http.Server{ReadHeaderTimeout: time.Second}, failedListener{}, time.Second)
 	if err == nil || err.Error() != "HTTP server failed" {
 		t.Fatal(err)
+	}
+}
+
+func TestProcessStopOnFailure(t *testing.T) {
+	for _, name := range []string{"startup", "listener", "cleanup"} {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			err := runApplication(t.Context(), func(_ context.Context, stack *cleanupStack) (*http.Server, net.Listener, error) {
+				stack.trackProcess(slogx.New(slogx.Config{Stdout: &logs}))
+				if name == "startup" {
+					return nil, nil, errors.New("startup failed")
+				}
+				if name == "cleanup" {
+					stack.add("database close failed", func(context.Context) error { return errors.New("secret") })
+					return &http.Server{ReadHeaderTimeout: time.Second}, closedListener{}, nil
+				}
+				return &http.Server{ReadHeaderTimeout: time.Second}, failedListener{}, nil
+			}, time.Second)
+			if err == nil || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unexpected result: %v", err)
+			}
+			assertStopEvent(t, logs.Bytes(), "error", "error")
+		})
+	}
+}
+
+type closedListener struct{ failedListener }
+
+func (closedListener) Accept() (net.Conn, error) { return nil, http.ErrServerClosed }
+
+func assertStopEvent(t *testing.T, data []byte, outcome, level string) {
+	t.Helper()
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatalf("decode lifecycle event: %v; %s", err, data)
+	}
+	for key, want := range map[string]string{"event": "process.stopped", "component": "api", "outcome": outcome, "level": level} {
+		if event[key] != want {
+			t.Errorf("%s = %v, want %s", key, event[key], want)
+		}
 	}
 }

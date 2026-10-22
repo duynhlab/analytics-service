@@ -50,6 +50,7 @@ func bootstrap(ctx context.Context, cfg config.Config, cleanups *cleanupStack) (
 	cleanups.add("telemetry shutdown failed", obs.Shutdown)
 
 	logger := slogx.New(slogx.Config{Level: cfg.LogLevel, LoggerProvider: obs.LoggerProvider(), Flush: obs.ForceFlush})
+	cleanups.trackProcess(logger)
 	conn, err := clickhouse.Open(cfg.ClickHouse)
 	if err != nil {
 		return nil, nil, errors.New("ClickHouse initialization failed")
@@ -74,10 +75,6 @@ func bootstrap(ctx context.Context, cfg config.Config, cleanups *cleanupStack) (
 	if err != nil {
 		return nil, nil, errors.New("HTTP listener failed")
 	}
-	logger.ProcessStarted(ctx, "http")
-	cleanups.add("process stop logging failed", func(ctx context.Context) error {
-		logger.ProcessStopped(ctx, "http", "stopped")
-		return nil
-	})
+	logger.ProcessStarted(ctx, slogx.ComponentAPI)
 	return server, listener, nil
 }

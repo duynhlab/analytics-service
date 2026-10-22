@@ -47,7 +47,12 @@ func run() error {
 
 func bootstrap(ctx context.Context, cfg config.Config, cleanups *cleanupStack) (*http.Server, net.Listener, error) {
 	oc := obsx.ConfigFromEnv()
-	oc.ServiceName = "analytics-service"
+	// The fleet names telemetry after the service, not the repository
+	// (OTEL_SERVICE_NAME=analytics in compose and the ResourceSet); the
+	// constant is only the fallback for a bare process.
+	if oc.ServiceName == "" {
+		oc.ServiceName = "analytics"
+	}
 	if oc.ServiceVersion == "" {
 		oc.ServiceVersion = version
 	}

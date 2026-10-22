@@ -154,17 +154,25 @@ func heartbeatStamps(rows []domain.Heartbeat, now time.Time) ([3]time.Time, erro
 		return stamps, errors.New("invalid heartbeat batch")
 	}
 	for _, row := range rows {
-		index := -1
-		for i, source := range sources {
-			if row.Name == source {
-				index = i
-				break
-			}
-		}
-		if index < 0 || !stamps[index].IsZero() || row.At == nil || row.At.IsZero() || row.At.After(now) {
+		index, ok := sourceIndex(row.Name)
+		if !ok || !stamps[index].IsZero() || row.At == nil || row.At.IsZero() || row.At.After(now) {
 			return stamps, errors.New("invalid heartbeat batch")
 		}
 		stamps[index] = *row.At
 	}
 	return stamps, nil
+}
+
+// sourceIndex maps a source name to its fixed position; the switch keeps the
+// bound explicit for the three-element arrays above.
+func sourceIndex(name string) (int, bool) {
+	switch name {
+	case sources[0]:
+		return 0, true
+	case sources[1]:
+		return 1, true
+	case sources[2]:
+		return 2, true
+	}
+	return 0, false
 }

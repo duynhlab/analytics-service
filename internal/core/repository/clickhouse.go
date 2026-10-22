@@ -71,6 +71,9 @@ func (r *ClickHouse) query(ctx context.Context, name, sql string, params clickho
 				kind := semconv.ErrorTypeKey.String(reason)
 				attrs = append(attrs, kind)
 				span.SetAttributes(kind)
+				// The sanitized error carries only the bounded reason; the raw
+				// driver error never reaches the span.
+				span.RecordError(err)
 				span.SetStatus(codes.Error, reason)
 			}
 		}
@@ -91,11 +94,12 @@ func (r *ClickHouse) query(ctx context.Context, name, sql string, params clickho
 	defer func() {
 		closeErr := rows.Close()
 		streamErr := rows.Err()
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			err = ctx.Err()
-		} else if streamErr != nil {
+		case streamErr != nil:
 			err = queryFailure(streamErr)
-		} else if closeErr != nil {
+		case closeErr != nil:
 			err = queryFailure(closeErr)
 		}
 	}()

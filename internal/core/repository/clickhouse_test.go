@@ -113,9 +113,13 @@ func TestReadStopsOnFailure(t *testing.T) {
 				if failure == "scan" {
 					return errors.New("sensitive scan error")
 				}
-				*v[0].(*string) = "2026-10-01"
-				*v[1].(*string) = "100"
-				*v[2].(*string) = "0"
+				for i, value := range []string{"2026-10-01", "100", "0"} {
+					target, ok := v[i].(*string)
+					if !ok {
+						return errors.New("unexpected scan target")
+					}
+					*target = value
+				}
 				return nil
 			}}
 			if failure == "stream" {

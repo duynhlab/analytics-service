@@ -119,13 +119,13 @@ func TestFreshnessMetricsIdleBoundariesAndExpiry(t *testing.T) {
 			m := collect(t, mr)
 			assertState(t, m, tc.state, &lag)
 			last := m["analytics.freshness.last_success.time"]
-			if last.Unit != "s" || last.Data.(metricdata.Gauge[float64]).DataPoints[0].Value != float64(now.Unix()) {
+			if last.Unit != "s" || gaugeValue(t, last) != float64(now.Unix()) {
 				t.Fatal(last)
 			}
 			now = now.Add(65 * time.Second)
 			m = collect(t, mr)
 			lag += 65
-			got := m["analytics.source.lag"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value
+			got := gaugeValue(t, m["analytics.source.lag"])
 			if got != lag {
 				t.Fatalf("lag froze: %v want %v", got, lag)
 			}
@@ -167,7 +167,7 @@ func TestFreshnessInvalidAndRecovery(t *testing.T) {
 			s.sample(t.Context())
 			m := collect(t, mr)
 			assertState(t, m, "unknown", nil)
-			if m["analytics.freshness.last_success.time"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value != first {
+			if gaugeValue(t, m["analytics.freshness.last_success.time"]) != first {
 				t.Fatal("advanced last success on failure")
 			}
 			rows = heartbeats(now)
@@ -274,4 +274,13 @@ func TestSamplerDoesNotOverlapSlowReader(t *testing.T) {
 			t.Fatal("accepted result after deadline/cancellation")
 		}
 	})
+}
+
+func gaugeValue(t *testing.T, m metricdata.Metrics) float64 {
+	t.Helper()
+	gauge, ok := m.Data.(metricdata.Gauge[float64])
+	if !ok || len(gauge.DataPoints) == 0 {
+		t.Fatalf("%s is not a float gauge with data: %+v", m.Name, m.Data)
+	}
+	return gauge.DataPoints[0].Value
 }

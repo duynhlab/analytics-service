@@ -8,8 +8,8 @@
     GROUP BY order_id
 )
 SELECT toString(count()), toString(countIf(c.order_id IS NOT NULL)),
-    toString(countIf(b.settled > 0)), toString(countIf(o.status = 'completed')),
+    toString(countIf(b.settled > 0)),
+    toString(countIf(c.order_id IN (SELECT toString(id) FROM analytics.order_orders_live WHERE status = 'completed'))),
     countIf(b.invalid > 0)
 FROM cohort AS c
 LEFT JOIN balances AS b ON c.order_id = b.order_id
-LEFT JOIN analytics.order_orders_live AS o ON c.order_id = toString(o.id)

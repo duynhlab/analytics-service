@@ -81,12 +81,10 @@ func TestServingIntegration(t *testing.T) {
 	}
 	for _, table := range tables {
 		raw := database + "." + table.name
-		exec("CREATE TABLE " + raw + " (" + table.columns + ", _peerdb_version UInt64, _peerdb_is_deleted UInt8) ENGINE=MergeTree ORDER BY id")
-		fields := make([]string, len(table.names))
-		for i, name := range table.names {
-			fields[i] = fmt.Sprintf("latest.%d AS %s", i+1, name)
-		}
-		exec("CREATE VIEW " + raw + "_live DEFINER=CURRENT_USER SQL SECURITY DEFINER AS SELECT " + strings.Join(fields, ",") + " FROM (SELECT id, argMax(tuple(" + strings.Join(table.names, ",") + ",_peerdb_is_deleted),_peerdb_version) AS latest FROM " + raw + " GROUP BY id) WHERE latest." + fmt.Sprint(len(table.names)+1) + " = 0")
+		exec("CREATE TABLE " + raw + " (" + table.columns + ", _peerdb_version UInt64, _peerdb_is_deleted UInt8) ENGINE=ReplacingMergeTree(_peerdb_version) ORDER BY id")
+		// Same shape as the platform's serving views: FINAL keeps the whole
+		// highest-version row (NULLs included), then tombstones are dropped.
+		exec("CREATE VIEW " + raw + "_live DEFINER=CURRENT_USER SQL SECURITY DEFINER AS SELECT " + strings.Join(table.names, ",") + " FROM " + raw + " FINAL WHERE _peerdb_is_deleted = 0")
 		exec("GRANT SELECT ON " + raw + "_live TO " + user)
 	}
 	insert := func(table, values string) {
